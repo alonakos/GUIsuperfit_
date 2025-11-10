@@ -3,54 +3,51 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 from dash.dependencies import Input, Output
 from dash.exceptions import PreventUpdate
-import pandas as pd
-import plotly.graph_objs as go
-import base64
-import io
-import json
-from astropy.io import fits
-import os
-import subprocess
-from dash import callback
 
-# Create the Dash app instance with multi-page support
 app = dash.Dash(__name__, use_pages=True, external_stylesheets=[dbc.themes.BOOTSTRAP])
+server = app.server  # for deployment 
 
-# Define tabs for navigation
-tabs = dcc.Tabs(
-    id="tabs",
-    value='tab-sfgui',
-    children=[
-        dcc.Tab(label='Sfgui', value='tab-sfgui'),
-        dcc.Tab(label='Sggui', value='tab-sggui'),
-    ],
-    persistence_type='session',
-    persistence=True
+
+navbar = dbc.NavbarSimple(brand="Superfit", brand_href="#", sticky="top")
+
+# Navbar
+navbar = dbc.NavbarSimple(
+    brand="Superfit",
+    brand_href="/",
+    sticky="top",
 )
 
-# Define layout
+# Tabs for page navigation
+tabs = dcc.Tabs(
+    id="tabs",
+    value="/sfgui",  # default page path
+    children=[
+        dcc.Tab(label="Input", value="tab-sfgui"),
+        dcc.Tab(label="Output", value="tab-sggui"),
+    ],
+    persistence=True,
+    persistence_type="session",
+)
+
+# Layout
 app.layout = html.Div(
     [
+        navbar,
         tabs,
-        dcc.Location(id="url", refresh=False),
-        dash.page_container
+        dcc.Location(id="url"),
+        dash.page_container,
     ]
 )
 
-# Define callback for tab routing
-@app.callback(
-    Output('url', 'pathname'),
-    Input('tabs', 'value'),
-    prevent_initial_call=True
-)
+@app.callback(Output("url", "pathname"), Input("tabs", "value"), prevent_initial_call=True)
 def route(tab_value):
-    if tab_value == 'tab-sfgui':
-        return '/sfgui'
-    if tab_value == 'tab-sggui':
-        return '/sggui'
+    if tab_value == "tab-sfgui":
+        return "/sfgui"
+    if tab_value == "tab-sggui":
+        return "/sggui"
     raise PreventUpdate
 
-# Run the server
-if __name__ == '__main__':
-    app.run_server(debug=True, port=8050)
-   	 
+if __name__ == "__main__":
+    app.run(debug=True, port=8050)
+
+
