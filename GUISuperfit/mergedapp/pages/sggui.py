@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -18,10 +19,46 @@ DEFAULT_NGSF_DIR = PROJECT_ROOT / "NGSF"
 NGSF_BASE = Path(os.environ.get("NGSF_DIR", str(DEFAULT_NGSF_DIR))).resolve()
 RESULTS_DIR = Path(os.environ.get("NGSF_RESULTS_DIR", str(NGSF_BASE / "results"))).resolve()
 
-# Ensure directories exist
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 navbar = dbc.NavbarSimple()
+
+# -------- Constants / Column definitions --------
+RESULT_COLUMNS = [
+    "SPECTRUM",
+    "GALAXY",
+    "SN",
+    "CONST_SN",
+    "CONST_GAL",
+    "Z",
+    "A_v",
+    "Phase",
+    "Band",
+    "Frac(SN)",
+    "Frac(gal)",
+    "CHI2/dof",
+    "CHI2/dof2",
+    "sn_name",
+]
+TABLE_COLUMNS = [c for c in RESULT_COLUMNS if c != "sn_name"]
+
+_PLOT_TOGGLE_OPTIONS = [
+    {"label": "Observation − Galaxy", "value": "omg"},
+    {"label": "Template", "value": "tem"},
+    {"label": "Galaxy", "value": "gal"},
+    {"label": "Observation", "value": "obs"},
+    {"label": "Normalized Template", "value": "ute"},
+]
+_ALL_PLOT_VALUES = [opt["value"] for opt in _PLOT_TOGGLE_OPTIONS]
+
+_TRACE_STYLES = {
+    "obs": {"color": "#111111"},
+    "gal": {"color": "#d62728"},
+    "tem": {"color": "#9467bd"},
+    "ute": {"color": "#ff7f0e", "dash": "dash"},
+    "omg": {"color": "#2ca02c"},
+}
+
 
 # -------- Helpers --------
 def _under_root(root: Path, p, *extra_roots: Path) -> Path | None:
@@ -36,25 +73,20 @@ def _under_root(root: Path, p, *extra_roots: Path) -> Path | None:
             return candidate
     return root / target
 
+
 def find_latest_csv_in(folder: Path) -> Path | None:
     if not folder.exists():
         return None
     files = sorted(folder.glob("*.csv"), key=lambda q: q.stat().st_mtime, reverse=True)
     return files[0] if files else None
 
+
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
-    required = [
-        "SPECTRUM","GALAXY","SN","CONST_SN","CONST_GAL","Z","A_v","Phase",
-        "Band","Frac(SN)","Frac(gal)","CHI2/dof","CHI2/dof2","sn_name"
-    ]
-    for c in required:
+    for c in RESULT_COLUMNS:
         if c not in df.columns:
             df[c] = pd.NA
-    order = [
-        "SPECTRUM","GALAXY","SN","CONST_SN","CONST_GAL","Z","A_v","Phase",
-        "Band","Frac(SN)","Frac(gal)","CHI2/dof","CHI2/dof2","sn_name"
-    ]
-    return df[[c for c in order if c in df.columns]]
+    return df[[c for c in RESULT_COLUMNS if c in df.columns]]
+
 
 def read_two_col_txt(path: Path) -> pd.DataFrame:
     try:
@@ -65,6 +97,7 @@ def read_two_col_txt(path: Path) -> pd.DataFrame:
     df.columns = ["wav", "flux"]
     return df.dropna().sort_values("wav").reset_index(drop=True)
 
+
 def normalize_flux(df: pd.DataFrame) -> pd.DataFrame:
     med = np.nanmedian(df["flux"].to_numpy(dtype=float))
     if not np.isfinite(med) or med == 0:
@@ -73,10 +106,12 @@ def normalize_flux(df: pd.DataFrame) -> pd.DataFrame:
     out["flux"] = out["flux"] / med
     return out
 
+
 def binspec(df: pd.DataFrame, start_w: float, end_w: float, step: float) -> pd.DataFrame:
     xs = np.arange(start_w, end_w, step, dtype=float)
     ys = np.interp(xs, df["wav"].to_numpy(), df["flux"].to_numpy(), left=np.nan, right=np.nan)
     return pd.DataFrame({"wav": xs, "flux": ys})
+
 
 def _fmt_float(x, nd=3):
     try:
@@ -86,6 +121,7 @@ def _fmt_float(x, nd=3):
     if np.isfinite(v):
         return f"{v:.{nd}f}"
     return "unknown"
+
 
 def _fmt_pct(x):
     try:
@@ -102,7 +138,7 @@ def _base_figure() -> go.Figure:
     fig.update_layout(
         template="plotly_white",
         xaxis=dict(title="Wavelength", tickformat=".0f"),
-        yaxis=dict(title="Normalized Flux"),
+        yaxis=dict(title="Flux arbitrary"),
         margin=dict(l=30, r=20, t=20, b=40),
         showlegend=True,
         legend=dict(x=0.88, y=0.98, bgcolor="rgba(255,255,255,0.6)"),
@@ -110,8 +146,35 @@ def _base_figure() -> go.Figure:
     )
     return fig
 
-# -------- Layout --------
 
+def _line_style(key: str, width: int = 2) -> dict:
+    base = {"width": width}
+    extra = _TRACE_STYLES.get(key, {})
+    base.update({k: v for k, v in extra.items() if v is not None})
+    return base
+
+
+def _safe_float(val):
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
+
+
+def _empty_results_response():
+    return None, None, [], [], []
+
+
+def _fallback_figure(stored_fig):
+    if stored_fig:
+        fig = go.Figure(stored_fig)
+        return fig, fig.to_dict()
+    fig = _base_figure()
+    return fig, fig.to_dict()
+
+
+# -------- Layout --------
 bestfit_card = dbc.Card(
     [
         dbc.CardHeader(html.H4("Best Fit", className="mb-0")),
@@ -120,6 +183,7 @@ bestfit_card = dbc.Card(
     className="border-success",
     style={"borderWidth": "2px"},
 )
+
 bestfit_wrapper = html.Div(
     bestfit_card,
     id="sggui-bestfit-wrapper",
@@ -127,30 +191,6 @@ bestfit_wrapper = html.Div(
     style={"display": "none"},
 )
 
-_PLOT_TOGGLE_OPTIONS = [
-    {"label": "Observation − Galaxy", "value": "omg"},
-    {"label": "Template", "value": "tem"},
-    {"label": "Galaxy", "value": "gal"},
-    {"label": "Observation", "value": "obs"},
-    {"label": "Normalized Template", "value": "ute"},
-]
-_ALL_PLOT_VALUES = [opt["value"] for opt in _PLOT_TOGGLE_OPTIONS]
-_TRACE_STYLES = {
-    "obs": {"color": "#111111"},
-    "gal": {"color": "#d62728"},
-    "tem": {"color": "#9467bd"},
-    "ute": {"color": "#ff7f0e", "dash": "dash"},
-    "omg": {"color": "#2ca02c"},
-}
-
-
-def _line_style(key: str, width: int = 2) -> dict:
-    base = {"width": width}
-    extra = _TRACE_STYLES.get(key, {})
-    for k, v in extra.items():
-        if v is not None:
-            base[k] = v
-    return base
 graph = dcc.Graph(
     id="sggui-graph",
     config={"displayModeBar": False, "responsive": True},
@@ -176,7 +216,11 @@ options_card = dbc.Card(
                             options=_PLOT_TOGGLE_OPTIONS,
                             value=_ALL_PLOT_VALUES,
                             inputStyle={"marginRight": "6px"},
-                            labelStyle={"display": "inline-block", "marginRight": "18px", "marginBottom": "6px"},
+                            labelStyle={
+                                "display": "inline-block",
+                                "marginRight": "18px",
+                                "marginBottom": "6px",
+                            },
                             persistence=True,
                             persistence_type="session",
                         ),
@@ -197,21 +241,7 @@ options_card = dbc.Card(
 
 results_table = dash_table.DataTable(
     id="sggui-table",
-    columns=[
-        {"name": "SPECTRUM", "id": "SPECTRUM"},
-        {"name": "GALAXY", "id": "GALAXY"},
-        {"name": "SN", "id": "SN"},
-        {"name": "CONST_SN", "id": "CONST_SN"},
-        {"name": "CONST_GAL", "id": "CONST_GAL"},
-        {"name": "Z", "id": "Z"},
-        {"name": "A_v", "id": "A_v"},
-        {"name": "Phase", "id": "Phase"},
-        {"name": "Band", "id": "Band"},
-        {"name": "Frac(SN)", "id": "Frac(SN)"},
-        {"name": "Frac(gal)", "id": "Frac(gal)"},
-        {"name": "CHI2/dof", "id": "CHI2/dof"},
-        {"name": "CHI2/dof2", "id": "CHI2/dof2"},
-    ],
+    columns=[{"name": c, "id": c} for c in TABLE_COLUMNS],
     data=[],
     editable=False,
     row_selectable="single",
@@ -223,18 +253,18 @@ results_table = dash_table.DataTable(
 
 table_card = dbc.Card(
     [
-        dbc.CardHeader(html.H4("Spectrum Files", className="mb-0")),
+        dbc.CardHeader(html.H4("Galaxy Specturm Match", className="mb-0")),
         dbc.CardBody(results_table),
     ],
     className="shadow-sm mb-4",
 )
 
-
 layout = html.Div(
     [
         navbar,
         dbc.Container(
-            [   options_card,
+            [
+                options_card,
                 graph_card,
                 table_card,
                 dcc.Store(id="sggui-results-path", storage_type="memory"),
@@ -247,6 +277,7 @@ layout = html.Div(
     ]
 )
 
+
 # -------- Callbacks --------
 @callback(
     Output("sggui-results-data", "data"),
@@ -258,29 +289,21 @@ layout = html.Div(
     prevent_initial_call=False,
 )
 def load_results(run_flag):
-    df = None
-    src_path = None
+    if not run_flag or not isinstance(run_flag, dict):
+        return _empty_results_response()
 
-    def empty_response():
-        return None, None, [], [], []
-
-    if not run_flag:
-        return empty_response()
-
-    action = run_flag.get("action") if isinstance(run_flag, dict) else None
-    if action == "clear":
-        return empty_response()
+    action = run_flag.get("action")
     if action != "run":
-        return empty_response()
+        return _empty_results_response()
 
     latest = find_latest_csv_in(RESULTS_DIR)
     if latest is None:
-        return empty_response()
+        return _empty_results_response()
+
     try:
         df = pd.read_csv(latest)
-        src_path = str(latest)
     except Exception:
-        return empty_response()
+        return _empty_results_response()
 
     df = ensure_columns(df)
     sort_cols = [c for c in ["CHI2/dof", "CHI2/dof2"] if c in df.columns]
@@ -290,8 +313,10 @@ def load_results(run_flag):
     table_cols = [c for c in df.columns if c != "sn_name"]
     columns = [{"name": c, "id": c} for c in table_cols]
     data = df[table_cols].to_dict("records")
-    selected = [0] if len(data) > 0 else []
-    return df.to_json(orient="split"), src_path, data, columns, selected
+    selected = [0] if data else []
+
+    return df.to_json(orient="split"), str(latest), data, columns, selected
+
 
 @callback(
     Output("sggui-graph", "figure"),
@@ -304,23 +329,17 @@ def load_results(run_flag):
     State("sggui-last-figure", "data"),
 )
 def plot_selected(sel_rows, plot_flags, bin_size, table_data, json_data, stored_fig):
-    fig = _base_figure()
     if not sel_rows or not table_data or not json_data:
-        if stored_fig:
-            return go.Figure(stored_fig), stored_fig
-        base_dict = fig.to_dict()
-        return fig, base_dict
+        fig, fig_dict = _fallback_figure(stored_fig)
+        return fig, fig_dict
 
     if plot_flags is None:
         plot_flags = _ALL_PLOT_VALUES
 
-    def _safe_float(val):
-        try:
-            f = float(val)
-        except (TypeError, ValueError):
-            return None
-        return f if np.isfinite(f) else None
+    df_all = pd.read_json(json_data, orient="split")
+    row = df_all.iloc[sel_rows[0]]
 
+    fig = _base_figure()
     y_extents: list[float] = []
 
     def _record(values):
@@ -329,43 +348,40 @@ def plot_selected(sel_rows, plot_flags, bin_size, table_data, json_data, stored_
         arr = np.asarray(values, dtype=float)
         arr = arr[np.isfinite(arr)]
         if arr.size:
-            y_extents.append(float(arr.min()))
-            y_extents.append(float(arr.max()))
+            y_extents.extend([float(arr.min()), float(arr.max())])
 
-    df_all = pd.read_json(json_data, orient="split")
-    row = df_all.iloc[sel_rows[0]]
-
-    traces_added = False
-
+    # paths
     obs_path = _under_root(RESULTS_DIR, row.get("SPECTRUM"), NGSF_BASE)
     gal_rel = None if pd.isna(row.get("GALAXY")) else str(row.get("GALAXY"))
     gal_path = (NGSF_BASE / "bank" / "binnings" / "10A" / "gal" / gal_rel) if gal_rel else None
     sn_path = _under_root(NGSF_BASE, row.get("sn_name"))
 
+    # bin size
     bin_step = _safe_float(bin_size)
-    if bin_step is None or bin_step <= 0:
+    if bin_step is not None and bin_step <= 0:
         bin_step = None
 
-    obs_data = None
-    obs_norm = None
-    obs_scale = 1.0
+    traces_added = False
+
+    # Observation
+    obs_data = obs_plot = None
     if obs_path and obs_path.exists():
         obs_data = read_two_col_txt(obs_path)
         if not obs_data.empty:
-            obs_work = obs_data.copy()
+            obs_plot = obs_data.copy()
             if bin_step:
-                obs_work = binspec(obs_work, obs_work["wav"].min(), obs_work["wav"].max(), bin_step)
-            obs_scale = np.nanmedian(obs_work["flux"].to_numpy(dtype=float))
-            if not np.isfinite(obs_scale) or obs_scale == 0:
-                obs_scale = 1.0
-            obs_norm = obs_work.copy()
-            obs_norm["flux"] = obs_work["flux"] / obs_scale
-            _record(obs_norm["flux"].to_numpy(dtype=float))
+                obs_plot = binspec(
+                    obs_plot,
+                    obs_plot["wav"].min(),
+                    obs_plot["wav"].max(),
+                    bin_step,
+                )
+            _record(obs_plot["flux"].to_numpy(dtype=float))
             if "obs" in plot_flags:
                 fig.add_trace(
                     go.Scatter(
-                        x=obs_norm["wav"],
-                        y=obs_norm["flux"],
+                        x=obs_plot["wav"],
+                        y=obs_plot["flux"],
                         mode="lines",
                         name="Observation",
                         line=_line_style("obs"),
@@ -373,7 +389,7 @@ def plot_selected(sel_rows, plot_flags, bin_size, table_data, json_data, stored_
                 )
                 traces_added = True
 
-    gal_norm = None
+    # Galaxy template scaled by CONST_GAL
     gal_scaled = None
     if gal_path and gal_path.exists():
         gal_data = read_two_col_txt(gal_path)
@@ -383,22 +399,22 @@ def plot_selected(sel_rows, plot_flags, bin_size, table_data, json_data, stored_
             if const_gal is not None:
                 gal_scaled["flux"] = gal_scaled["flux"] * const_gal
             if bin_step:
-                gal_scaled = binspec(gal_scaled, gal_scaled["wav"].min(), gal_scaled["wav"].max(), bin_step)
-            gal_norm = gal_scaled.copy()
-            gal_norm["flux"] = gal_norm["flux"] / (obs_scale if obs_scale else 1.0)
-            if gal_norm is not None and obs_norm is not None and not gal_norm.empty:
-                wmin = obs_norm["wav"].min()
-                wmax = obs_norm["wav"].max()
-                mask = (gal_norm["wav"] >= wmin) & (gal_norm["wav"] <= wmax)
-                gal_norm = gal_norm.loc[mask]
-                gal_scaled = gal_scaled.loc[mask]
-            if gal_norm is not None and not gal_norm.empty:
-                _record(gal_norm["flux"].to_numpy(dtype=float))
+                gal_scaled = binspec(
+                    gal_scaled,
+                    gal_scaled["wav"].min(),
+                    gal_scaled["wav"].max(),
+                    bin_step,
+                )
+            if obs_plot is not None and not obs_plot.empty:
+                wmin, wmax = obs_plot["wav"].min(), obs_plot["wav"].max()
+                gal_scaled = gal_scaled.loc[(gal_scaled["wav"] >= wmin) & (gal_scaled["wav"] <= wmax)]
+            if gal_scaled is not None and not gal_scaled.empty:
+                _record(gal_scaled["flux"].to_numpy(dtype=float))
                 if "gal" in plot_flags:
                     fig.add_trace(
                         go.Scatter(
-                            x=gal_norm["wav"],
-                            y=gal_norm["flux"],
+                            x=gal_scaled["wav"],
+                            y=gal_scaled["flux"],
                             mode="lines",
                             name=f"Galaxy ({row.get('GALAXY')})",
                             line=_line_style("gal"),
@@ -406,28 +422,31 @@ def plot_selected(sel_rows, plot_flags, bin_size, table_data, json_data, stored_
                     )
                     traces_added = True
 
-    sn_template_norm = None
-    sn_normed = None
+    # SN template and normalized template
+    sn_template = sn_normed = None
     if sn_path and sn_path.exists():
         sn_data = read_two_col_txt(sn_path)
-        if sn_data is not None and not sn_data.empty:
+        if not sn_data.empty:
             const_sn = _safe_float(row.get("CONST_SN"))
             sn_template = sn_data.copy()
             if const_sn is not None:
                 sn_template["flux"] = sn_template["flux"] * const_sn
             if bin_step:
-                sn_template = binspec(sn_template, sn_template["wav"].min(), sn_template["wav"].max(), bin_step)
-            sn_template_norm = sn_template.copy()
-            sn_template_norm["flux"] = sn_template_norm["flux"] / (obs_scale if obs_scale else 1.0)
+                sn_template = binspec(
+                    sn_template,
+                    sn_template["wav"].min(),
+                    sn_template["wav"].max(),
+                    bin_step,
+                )
             sn_normed = normalize_flux(sn_template)
-            _record(sn_template_norm["flux"].to_numpy(dtype=float))
+            _record(sn_template["flux"].to_numpy(dtype=float))
             _record(sn_normed["flux"].to_numpy(dtype=float))
 
-    if "tem" in plot_flags and sn_template_norm is not None:
+    if "tem" in plot_flags and sn_template is not None:
         fig.add_trace(
             go.Scatter(
-                x=sn_template_norm["wav"],
-                y=sn_template_norm["flux"],
+                x=sn_template["wav"],
+                y=sn_template["flux"],
                 mode="lines",
                 name="Template",
                 line=_line_style("tem"),
@@ -447,16 +466,23 @@ def plot_selected(sel_rows, plot_flags, bin_size, table_data, json_data, stored_
         )
         traces_added = True
 
-    if "omg" in plot_flags and obs_norm is not None and gal_norm is not None:
+    # Observation − Galaxy
+    if (
+        "omg" in plot_flags
+        and obs_plot is not None
+        and gal_scaled is not None
+        and not obs_plot.empty
+        and not gal_scaled.empty
+    ):
         gal_interp = np.interp(
-            obs_norm["wav"].to_numpy(),
-            gal_norm["wav"].to_numpy(),
-            gal_norm["flux"].to_numpy(),
+            obs_plot["wav"].to_numpy(),
+            gal_scaled["wav"].to_numpy(),
+            gal_scaled["flux"].to_numpy(),
             left=np.nan,
             right=np.nan,
         )
-        omg_flux = obs_norm["flux"].to_numpy() - gal_interp
-        omg = pd.DataFrame({"wav": obs_norm["wav"], "flux": omg_flux})
+        omg_flux = obs_plot["flux"].to_numpy() - gal_interp
+        omg = pd.DataFrame({"wav": obs_plot["wav"], "flux": omg_flux})
         omg = omg.replace([np.inf, -np.inf], np.nan).dropna()
         if not omg.empty:
             _record(omg["flux"].to_numpy(dtype=float))
@@ -472,23 +498,19 @@ def plot_selected(sel_rows, plot_flags, bin_size, table_data, json_data, stored_
             traces_added = True
 
     if not traces_added:
-        if stored_fig:
-            return go.Figure(stored_fig), stored_fig
-        base_dict = fig.to_dict()
-        return fig, base_dict
+        fig, fig_dict = _fallback_figure(stored_fig)
+        return fig, fig_dict
 
     if y_extents:
         y_min = float(np.min(y_extents))
         y_max = float(np.max(y_extents))
         spread = y_max - y_min
-        if spread <= 0:
-            pad = max(abs(y_min), 1.0) * 0.05
-        else:
-            pad = spread * 0.05
+        pad = (max(abs(y_min), 1.0) * 0.05) if spread <= 0 else spread * 0.05
         fig.update_yaxes(range=[y_min - pad, y_max + pad], autorange=False)
 
     fig_dict = fig.to_dict()
     return fig, fig_dict
+
 
 @callback(
     Output("sggui-bestfit", "children"),
@@ -511,16 +533,22 @@ def update_bestfit(sel_rows, json_data):
     frac_sn = _fmt_pct(row.get("Frac(SN)"))
     chi = _fmt_float(row.get("CHI2/dof"), nd=2)
 
-    return html.Div([
-    html.Div([html.Strong("Supernova Type: "), html.Span(str(sn_type))], style={"margin": "2px 0"}),
-    html.Div([html.Strong("Host Galaxy: "), html.Span(str(host))], style={"margin": "2px 0"}),
-    html.Div([html.Strong("Redshift (z): "), html.Span(z)], style={"margin": "2px 0"}),
-    html.Div([html.Strong("Extinction (A_v): "), html.Span(av)], style={"margin": "2px 0"}),
-    html.Div([html.Strong("SN Contribution: "), html.Span(frac_sn)], style={"margin": "2px 0"}),
-    html.Div([html.Strong("Chi-squared: "), html.Span(chi)], style={"margin": "2px 0"}),
-])
+    def _line(label, value):
+        return html.Div(
+            [html.Strong(label), html.Span(value)],
+            style={"margin": "2px 0"},
+        )
 
-
+    return html.Div(
+        [
+            _line("Supernova Type: ", sn_type),
+            _line("Host Galaxy: ", host),
+            _line("Redshift (z): ", z),
+            _line("Extinction (A_v): ", av),
+            _line("SN Contribution: ", frac_sn),
+            _line("Chi-squared: ", chi),
+        ]
+    )
 
 
 @callback(
@@ -534,6 +562,4 @@ def toggle_bestfit_display(json_data):
         df = pd.read_json(json_data, orient="split")
     except Exception:
         return {"display": "none"}
-    if df.empty:
-        return {"display": "none"}
-    return {"display": "block"}
+    return {"display": "block"} if not df.empty else {"display": "none"}

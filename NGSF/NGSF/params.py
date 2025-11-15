@@ -108,7 +108,7 @@ class Parameters:
             self.lam = np.linspace(self.lower, self.upper, interval)
 
         # Kind of error spectrum ('SG', 'linear' or 'included')
-        self.kind = data["error_spectrum"]
+        self.kind = str(data["error_spectrum"]).lower()
 
         # Show plot?
         self.show = data["show_plot"]

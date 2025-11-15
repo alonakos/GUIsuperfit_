@@ -13,7 +13,6 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html, callback
 from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -66,8 +65,10 @@ def _sn_state(disabled: bool):
     return [disabled] * _CATEGORY_COUNT, [style.copy() for _ in range(_CATEGORY_COUNT)]
 
 
-galaxy_options = [{"label": g, "value": g} for g in ["E", "S0", "Sa", "Sb", "Sc",
-                                                     "SB1", "SB2", "SB3", "SB4", "SB5", "SB6"]]
+galaxy_options = [
+    {"label": g, "value": g}
+    for g in ["E", "S0", "Sa", "Sb", "Sc", "SB1", "SB2", "SB3", "SB4", "SB5", "SB6"]
+]
 
 known_redshift_tab = dbc.Card(
     dbc.CardBody(
@@ -183,8 +184,11 @@ def _sn_accordion():
                 dcc.Checklist(
                     id={"type": "sn-subtypes", "category": category},
                     options=[{"label": s, "value": s} for s in subs],
-                    value=(subs if category in _default_cats
-                           else [s for s in subs if s in _default_subtypes]),
+                    value=(
+                        subs
+                        if category in _default_cats
+                        else [s for s in subs if s in _default_subtypes]
+                    ),
                     persistence=True,
                     persistence_type="session",
                     inputStyle={"marginRight": "6px"},
@@ -327,7 +331,13 @@ wavelength_slider = html.Div(
     className="mt-2",
 )
 
-btn_generate = dbc.Button("Generate JSON", color="secondary", id="sfgui-generate", className="me-2", disabled=True)
+btn_generate = dbc.Button(
+    "Generate JSON",
+    color="secondary",
+    id="sfgui-generate",
+    className="me-2",
+    disabled=True,
+)
 btn_run = dbc.Button("Run Fit", color="primary", id="sfgui-run", disabled=True)
 btn_run_loader = dcc.Loading(
     id="sfgui-run-loader",
@@ -338,7 +348,10 @@ btn_run_loader = dcc.Loading(
 btn_clear = dbc.Button("Clear", color="danger", id="sfgui-clear", className="mr-1")
 
 json_status = html.Div(id="sfgui-json-status", className="text-muted small mb-2")
-json_output = html.Pre(id="sfgui-json", style={"whiteSpace": "pre-wrap", "maxHeight": "35vh", "overflowY": "auto"})
+json_output = html.Pre(
+    id="sfgui-json",
+    style={"whiteSpace": "pre-wrap", "maxHeight": "35vh", "overflowY": "auto"},
+)
 run_status = html.Div(id="sfgui-run-status")
 download_json = dcc.Download(id="sfgui-download")
 
@@ -362,7 +375,12 @@ layout = html.Div(
                                 z_tabs,
                                 sn_checklist,
                                 html.Div(
-                                    [btn_run_loader, btn_generate, btn_clear, download_json],
+                                    [
+                                        btn_run_loader,
+                                        btn_generate,
+                                        btn_clear,
+                                        download_json,
+                                    ],
                                     className="mt-2",
                                 ),
                                 dbc.Card(
@@ -393,7 +411,19 @@ layout = html.Div(
 )
 
 
-def _build_params(filename, z_known, z1, z2, dz, sn_types, epoch_range, galaxies, a_hi, a_lo, a_int):
+def _build_params(
+    filename,
+    z_known,
+    z1,
+    z2,
+    dz,
+    sn_types,
+    epoch_range,
+    galaxies,
+    a_hi,
+    a_lo,
+    a_int,
+):
     return {
         "object_to_fit": filename if filename else "spectrum.dat",
         "use_exact_z": 1 if z_known is not None else 0,
@@ -458,26 +488,6 @@ def _parse_dat(contents, filename):
         f.write(data)
 
     return df
-
-
-def rebin_spectrum(df, bin_width=10.0):
-    if df is None or df.empty:
-        return df
-
-    df = df.sort_values("wavelength")
-    wl = df["wavelength"].to_numpy(dtype=float)
-    fl = df["flux"].to_numpy(dtype=float)
-
-    wl_min = float(wl.min())
-    wl_max = float(wl.max())
-
-    if wl_max <= wl_min or bin_width <= 0:
-        return df
-
-    new_wl = np.arange(wl_min, wl_max + bin_width, bin_width)
-    new_fl = np.interp(new_wl, wl, fl)
-
-    return pd.DataFrame({"wavelength": new_wl, "flux": new_fl})
 
 
 @callback(
@@ -591,18 +601,18 @@ def update_graph(df_json, wave_range, filename):
 
     if not df_json:
         return fig
+    
+    def smooth_flux(df, window=5):
+        if df is None or df.empty:
+            return df
+        smoothed = df.copy()
+        smoothed["flux"] = smoothed["flux"].rolling(window, center=True, min_periods=1).mean()
+        return smoothed
 
     df = pd.read_json(df_json, orient="split")
-    df = rebin_spectrum(df, bin_width=10.0)
+    df = smooth_flux(df, window=7)   
 
-    med = pd.to_numeric(df["flux"], errors="coerce").median()
-    if pd.isna(med) or med == 0:
-        med = 1.0
-    df = df.copy()
-    df["flux"] = df["flux"] / med
 
-    if wave_range:
-        df = df[(df["wavelength"] >= wave_range[0]) & (df["wavelength"] <= wave_range[1])]
 
     fig.add_trace(
         go.Scatter(
@@ -635,15 +645,42 @@ def update_graph(df_json, wave_range, filename):
     State("sfgui-store-fn", "data"),
     prevent_initial_call=True,
 )
-def generate_json(n, z_known, z1, z2, dz, sn_types, epoch_range, galaxies, a_hi, a_lo, a_int, filename):
+def generate_json(
+    n,
+    z_known,
+    z1,
+    z2,
+    dz,
+    sn_types,
+    epoch_range,
+    galaxies,
+    a_hi,
+    a_lo,
+    a_int,
+    filename,
+):
     if not n:
         raise PreventUpdate
 
-    params = _build_params(filename, z_known, z1, z2, dz, sn_types, epoch_range, galaxies, a_hi, a_lo, a_int)
+    params = _build_params(
+        filename,
+        z_known,
+        z1,
+        z2,
+        dz,
+        sn_types,
+        epoch_range,
+        galaxies,
+        a_hi,
+        a_lo,
+        a_int,
+    )
     text = json.dumps(params, indent=4)
 
     base_name = Path(filename).stem if filename else "spectrum"
-    safe_base = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in base_name)
+    safe_base = "".join(
+        c if c.isalnum() or c in ("-", "_") else "_" for c in base_name
+    )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     json_name = f"parameters_{safe_base}_{timestamp}.json"
 
@@ -677,11 +714,36 @@ def generate_json(n, z_known, z1, z2, dz, sn_types, epoch_range, galaxies, a_hi,
     State("sfgui-store-fn", "data"),
     prevent_initial_call=True,
 )
-def run_fit(n, z_known, z1, z2, dz, sn_types, epoch_range, galaxies, a_hi, a_lo, a_int, filename):
+def run_fit(
+    n,
+    z_known,
+    z1,
+    z2,
+    dz,
+    sn_types,
+    epoch_range,
+    galaxies,
+    a_hi,
+    a_lo,
+    a_int,
+    filename,
+):
     if not n:
         raise PreventUpdate
 
-    params = _build_params(filename, z_known, z1, z2, dz, sn_types, epoch_range, galaxies, a_hi, a_lo, a_int)
+    params = _build_params(
+        filename,
+        z_known,
+        z1,
+        z2,
+        dz,
+        sn_types,
+        epoch_range,
+        galaxies,
+        a_hi,
+        a_lo,
+        a_int,
+    )
     json_string = json.dumps(params)
 
     try:
@@ -700,11 +762,15 @@ def run_fit(n, z_known, z1, z2, dz, sn_types, epoch_range, galaxies, a_hi, a_lo,
         )
         return alert, None, dash.no_update
     except Exception as e:
-        alert = dbc.Alert(f"Error while running fit: {e}", color="danger", className="mb-0")
+        alert = dbc.Alert(
+            f"Error while running fit: {e}", color="danger", className="mb-0"
+        )
         return alert, None, dash.no_update
 
     if result.returncode == 0:
-        alert = dbc.Alert("Fit completed successfully.", color="success", className="mb-0")
+        alert = dbc.Alert(
+            "Fit completed successfully.", color="success", className="mb-0"
+        )
         return alert, {"action": "run", "ts": time.time()}, dash.no_update
 
     alert = dbc.Alert(
@@ -776,7 +842,6 @@ def clear_all(n):
         "",
         "",
         "",
-        "",
         "Select All",
         disabled_list,
         disabled_styles,
@@ -837,7 +902,10 @@ def _sync_sn_selections(cat_states, select_clicks, sub_values, options_list):
 
         select_all = not all_selected
         new_cat_values = [select_all and bool(opts) for opts in options_list]
-        new_sub_values = [[o["value"] for o in (opts or [])] if select_all else [] for opts in options_list]
+        new_sub_values = [
+            [o["value"] for o in (opts or [])] if select_all else []
+            for opts in options_list
+        ]
         combined = _aggregate(new_sub_values)
         button_label = "Deselect All" if len(combined) == len(_all_subtypes) else "Select All"
         return new_cat_values, new_sub_values, combined, button_label
@@ -861,7 +929,9 @@ def _sync_sn_selections(cat_states, select_clicks, sub_values, options_list):
 
             normalized_cat = []
             for i, opts in enumerate(options_list):
-                has_all = bool(opts) and set(sub_values[i]) == {o["value"] for o in (opts or [])}
+                has_all = bool(opts) and set(sub_values[i]) == {
+                    o["value"] for o in (opts or [])
+                }
                 normalized_cat.append(has_all)
 
             return normalized_cat, sub_values, combined, button_label
@@ -870,7 +940,9 @@ def _sync_sn_selections(cat_states, select_clicks, sub_values, options_list):
             normalized_cat = []
             for opts, vals in zip(options_list, sub_values):
                 option_values = {o["value"] for o in (opts or [])}
-                normalized_cat.append(bool(option_values) and set(vals or []) == option_values)
+                normalized_cat.append(
+                    bool(option_values) and set(vals or []) == option_values
+                )
 
             combined = _aggregate(sub_values)
             button_label = "Deselect All" if len(combined) == len(_all_subtypes) else "Select All"
