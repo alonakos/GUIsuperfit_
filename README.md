@@ -18,7 +18,8 @@ The tool uses the **Superfit** package together with modern Dash UI components.
 If you do not have `uv` installed:
 ```bash
 pip install uv
-
+ or
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 git clone git@github.com:alonakos/GUIsuperfit.git
 cd GUIsuperfit
