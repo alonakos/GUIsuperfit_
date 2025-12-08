@@ -253,7 +253,23 @@ sn_checklist = dbc.Card(
             ),
             html.Small(id="sfgui-epoch-label"),
             html.Hr(),
-            html.Label("Galaxies"),
+            html.Div(
+                [
+                    html.Label(
+                        "Galaxies",
+                        style={"fontWeight": "bold"},
+                        className="mb-0",
+                    ),
+                    dbc.Button(
+                        "Select All",
+                        id="sfgui-gal-select",
+                        size="sm",
+                        color="link",
+                        className="p-0",
+                    ),
+                ],
+                className="d-flex justify-content-between align-items-center mb-2",
+            ),
             dbc.Checklist(
                 id="sfgui-galaxies",
                 options=galaxy_options,
@@ -469,7 +485,7 @@ def _parse_dat(contents, filename):
         df = pd.DataFrame(columns=["wavelength", "flux"])
     else:
         df = df.iloc[:, :2]
-        df.columns = ["wavelength", "flux"]
+    df.columns = ["wavelength", "flux"]
 
     df["wavelength"] = pd.to_numeric(df["wavelength"], errors="coerce")
     df["flux"] = pd.to_numeric(df["flux"], errors="coerce")
@@ -769,7 +785,18 @@ def run_fit(
 
     if result.returncode == 0:
         alert = dbc.Alert(
-            "Fit completed successfully.", color="success", className="mb-0"
+            [
+                "Fit completed successfully.",
+                html.Br(),
+                dbc.Button(
+                    "See Results",
+                    href="/sggui",
+                    color="secondary",
+                    className="mt-2"
+                ),
+            ],
+            color="success",
+            className="mb-0",
         )
         return alert, {"action": "run", "ts": time.time()}, dash.no_update
 
@@ -794,6 +821,7 @@ def run_fit(
     Output({"type": "sn-subtypes", "category": ALL}, "value", allow_duplicate=True),
     Output("sfgui-epoch-range", "value", allow_duplicate=True),
     Output("sfgui-galaxies", "value", allow_duplicate=True),
+    Output("sfgui-gal-select", "children", allow_duplicate=True),
     Output("sfgui-a-hi", "value", allow_duplicate=True),
     Output("sfgui-a-lo", "value", allow_duplicate=True),
     Output("sfgui-a-int", "value", allow_duplicate=True),
@@ -820,38 +848,51 @@ def clear_all(n):
         raise PreventUpdate
 
     disabled_list, disabled_styles = _sn_state(disabled=True)
-    default_cat_states = [False] * _CATEGORY_COUNT
-    default_sub_values = [[] for _ in range(_CATEGORY_COUNT)]
+    count = _CATEGORY_COUNT
+    empty_cats = [False] * count
+    empty_subs = [[] for _ in range(count)]
 
     return (
-        None,
-        None,
-        None,
-        None,
-        [],
-        default_cat_states,
-        default_sub_values,
+        None,  
+        None, 
+        None, 
+        None, 
+        [], 
+        empty_cats,
+        empty_subs,
         DEFAULT_EPOCH_RANGE,
-        [],
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        [], 
+        "Select All", 
+        None, None, None,
+        None, None, None,
         "",
-        "",
-        "",
+        "", "", "", 
         "Select All",
         disabled_list,
         disabled_styles,
-        True,
-        True,
-        True,
-        [LOWER_LAM, UPPER_LAM],
+        True,     
+        True, 
+        True, 
+        [LOWER_LAM, UPPER_LAM],  
         {"action": "clear", "ts": time.time()},
     )
 
+@callback(
+    Output("sfgui-galaxies", "value"),
+    Output("sfgui-gal-select", "children"),
+    Input("sfgui-gal-select", "n_clicks"),
+    State("sfgui-galaxies", "value")
+)
+def toggle_galaxies(n, current):
+    if not n:
+        raise PreventUpdate
+
+    all_gals = [g["value"] for g in galaxy_options]
+
+    if set(current) == set(all_gals):
+        return [], "Select All"
+    else:
+        return all_gals, "Deselect All"
 
 @callback(
     Output({"type": "sn-cat-toggle", "category": ALL}, "value", allow_duplicate=True),
