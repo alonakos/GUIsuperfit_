@@ -42,6 +42,23 @@ RESULT_COLUMNS = [
 ]
 TABLE_COLUMNS = [c for c in RESULT_COLUMNS if c != "sn_name"]
 
+COLUMN_ALIASES = {
+    "CONST SN": "CONST_SN",
+    "CONST_SN ": "CONST_SN",
+    "CONST GAL": "CONST_GAL",
+    "CONST_GAL ": "CONST_GAL",
+    "Frac SN": "Frac(SN)",
+    "Frac_SN": "Frac(SN)",
+    "Frac(SN) ": "Frac(SN)",
+    "Frac gal": "Frac(gal)",
+    "Frac_gal": "Frac(gal)",
+    "Frac(gal) ": "Frac(gal)",
+    "CHI2 dof": "CHI2/dof",
+    "CHI2_dof": "CHI2/dof",
+    "CHI2 dof2": "CHI2/dof2",
+    "CHI2_dof2": "CHI2/dof2",
+}
+
 _PLOT_TOGGLE_OPTIONS = [
     {"label": "Observation − Galaxy", "value": "omg"},
     {"label": "Template", "value": "tem"},
@@ -82,10 +99,17 @@ def find_latest_csv_in(folder: Path) -> Path | None:
 
 
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.rename(columns=COLUMN_ALIASES)
+
     for c in RESULT_COLUMNS:
         if c not in df.columns:
             df[c] = pd.NA
-    return df[[c for c in RESULT_COLUMNS if c in df.columns]]
+
+    ordered = [c for c in RESULT_COLUMNS if c in df.columns]
+    extras = [c for c in df.columns if c not in ordered and c != "sn_name"]
+    return df[ordered + extras]
 
 
 def read_two_col_txt(path: Path) -> pd.DataFrame:
@@ -253,7 +277,7 @@ results_table = dash_table.DataTable(
 
 table_card = dbc.Card(
     [
-        dbc.CardHeader(html.H4("Galaxy Specturm Match", className="mb-0")),
+        dbc.CardHeader(html.H4("Galaxy Spectrum Match", className="mb-0")),
         dbc.CardBody(results_table),
     ],
     className="shadow-sm mb-4",
@@ -289,11 +313,7 @@ layout = html.Div(
     prevent_initial_call=False,
 )
 def load_results(run_flag):
-    if not run_flag or not isinstance(run_flag, dict):
-        return _empty_results_response()
-
-    action = run_flag.get("action")
-    if action != "run":
+    if isinstance(run_flag, dict) and run_flag.get("action") == "clear":
         return _empty_results_response()
 
     latest = find_latest_csv_in(RESULTS_DIR)
@@ -321,7 +341,7 @@ def load_results(run_flag):
 @callback(
     Output("sggui-graph", "figure"),
     Output("sggui-last-figure", "data"),
-    Input("sggui-table", "derived_virtual_selected_rows"),
+    Input("sggui-table", "selected_rows"),
     Input("sggui-plots", "value"),
     Input("sggui-bin", "value"),
     State("sggui-table", "data"),
@@ -514,7 +534,7 @@ def plot_selected(sel_rows, plot_flags, bin_size, table_data, json_data, stored_
 
 @callback(
     Output("sggui-bestfit", "children"),
-    Input("sggui-table", "derived_virtual_selected_rows"),
+    Input("sggui-table", "selected_rows"),
     State("sggui-results-data", "data"),
 )
 def update_bestfit(sel_rows, json_data):
