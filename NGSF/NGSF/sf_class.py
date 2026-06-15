@@ -7,7 +7,7 @@ from scipy import interpolate
 from scipy.ndimage import gaussian_filter1d
 
 
-from NGSF.SF_functions import Alam, all_parameter_space, remove_telluric, mask_gal_lines
+from NGSF.SF_functions import Alam, all_parameter_space, remove_telluric, mask_gal_lines, report_progress
 from NGSF.Header_Binnings import kill_header, kill_header_and_bin
 from NGSF.error_routines import linear_error, savitzky_golay
 from NGSF.get_metadata import Metadata
@@ -177,6 +177,8 @@ class Superfit:
         plt.legend(framealpha=1, frameon=True, fontsize=12)
         
     def superfit(self):
+          progress_path = getattr(parameters, "progress_path", None)
+          report_progress(progress_path, 2, "Preparing fit")
           try:
                print(
                     "Running optimization for spectrum file: {0} with resolution = {1} Å".format(
@@ -204,6 +206,7 @@ class Superfit:
                     save=self.results_name,
                     show=parameters.show,
                     minimum_overlap=parameters.minimum_overlap,
+                    progress_path=progress_path,
                )
 
           except Exception:
@@ -228,9 +231,11 @@ class Superfit:
                     save=self.results_name,
                     show=parameters.show,
                     minimum_overlap=parameters.minimum_overlap,
+                    progress_path=progress_path,
                )
 
           # Read the results from the CSV file
+          report_progress(progress_path, 92, "Preparing output table")
           self.results = pd.read_csv(self.results_path)
 
           # Add sn_name column
@@ -366,6 +371,9 @@ class Superfit:
 
                if parameters.show == 1:
                     plt.show()
+
+          report_progress(progress_path, 100, "Fit complete")
+          return 100
 
 '''
     def superfit(self):
