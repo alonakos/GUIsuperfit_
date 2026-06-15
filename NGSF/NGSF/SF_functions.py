@@ -6,6 +6,8 @@ from astropy import table
 from astropy.io import ascii
 import itertools
 import os
+import json
+import time
 from PyAstronomy import pyasl
 
 from NGSF.get_metadata import Metadata
@@ -17,6 +19,24 @@ np.seterr(divide="ignore", invalid="ignore")
 
 
 parameters = Parameters(data)
+
+
+def report_progress(progress_path, percent, message=""):
+    percent = int(max(0, min(100, percent)))
+
+    if progress_path:
+        payload = {
+            "percent": percent,
+            "message": message,
+            "ts": time.time(),
+        }
+        tmp = progress_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, progress_path)
+
+    print(f"PROGRESS {percent} {message}", flush=True)
+    return percent
 
 
 def sn_hg_arrays(
@@ -443,14 +463,14 @@ def all_parameter_space(
 
     """
 
-    import time
-
     metadata = Metadata()
 
     print("NGSF started")
     start = time.time()
 
     save = kwargs["save"]
+    progress_path = kwargs.get("progress_path")
+    report_progress(progress_path, 5, "Loading metadata")
 
     templates_sn_trunc_dict = {}
     templates_gal_trunc_dict = {}
@@ -507,16 +527,21 @@ def all_parameter_space(
             templates_sn_trunc_dict[short_name] = one_sn
             alam_dict[short_name] = Alam(one_sn[:, 0])
 
+    report_progress(progress_path, 12, "Loading galaxy templates")
+
     for i in range(0, len(templates_gal_trunc)):
 
         one_gal = np.loadtxt(templates_gal_trunc[i])
         one_gal = bin_spectrum_bank(one_gal, resolution)
         templates_gal_trunc_dict[templates_gal_trunc[i]] = one_gal
 
+    report_progress(progress_path, 20, "Starting parameter grid")
+
     sn_spec_files = [x for x in path_dict.keys()]
     results = []
+    grid_total = max(len(redshift) * len(extconstant), 1)
 
-    for element in itertools.product(redshift, extconstant):
+    for grid_index, element in enumerate(itertools.product(redshift, extconstant), start=1):
 
         a, _ = core(
             int_obj,
@@ -534,6 +559,8 @@ def all_parameter_space(
         )
 
         results.append(a)
+        percent = 20 + int(60 * grid_index / grid_total)
+        report_progress(progress_path, percent, f"Fitting grid point {grid_index}/{grid_total}")
 
     result = table.vstack(results)
 
@@ -543,10 +570,12 @@ def all_parameter_space(
 
     result.sort("CHI2/dof2")
 
+    report_progress(progress_path, 85, "Writing results")
     ascii.write(result, save + ".csv", format="csv", fast_writer=False, overwrite=True)
 
     end = time.time()
     print("Runtime: {0: .2f}s ".format(end - start))
+    report_progress(progress_path, 90, "Optimization complete")
 
     # if plot==1:
 
