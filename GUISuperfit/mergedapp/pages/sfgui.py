@@ -5,6 +5,7 @@ import io
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -33,6 +34,30 @@ DEFAULT_EPOCH_RANGE = [-30, 171]
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+RUNS = {}
+
+
+def _write_progress(path, percent, message=""):
+    payload = {
+        "percent": int(max(0, min(100, percent))),
+        "message": message,
+        "ts": time.time(),
+    }
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(payload, f)
+    os.replace(tmp, path)
+
+
+def _read_progress(path):
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        return int(data.get("percent", 0)), data.get("message", "")
+    except Exception:
+        return 0, ""
 
 navbar = dbc.NavbarSimple()
 
@@ -278,42 +303,69 @@ sn_checklist = dbc.Card(
                 persistence=True,
                 persistence_type="session",
             ),
-            html.Div(
-                dbc.Row(
+            dbc.Card(
+                dbc.CardBody(
                     [
-                        dbc.Col(
-                            dbc.Input(
-                                id="sfgui-a-hi",
-                                type="number",
-                                placeholder="A_hi",
-                                persistence=True,
-                                persistence_type="session",
-                            ),
-                            width=4,
-                        ),
-                        dbc.Col(
-                            dbc.Input(
-                                id="sfgui-a-lo",
-                                type="number",
-                                placeholder="A_lo",
-                                persistence=True,
-                                persistence_type="session",
-                            ),
-                            width=4,
-                        ),
-                        dbc.Col(
-                            dbc.Input(
-                                id="sfgui-a-int",
-                                type="number",
-                                placeholder="A_i",
-                                persistence=True,
-                                persistence_type="session",
-                            ),
-                            width=4,
+                        html.H5("Reddening", className="mb-3"),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.InputGroupText("A_hi"),
+                                            dbc.Input(
+                                                id="sfgui-a-hi",
+                                                type="number",
+                                                value=3.0,
+                                                step=0.1,
+                                                persistence=True,
+                                                persistence_type="session",
+                                            ),
+                                        ],
+                                        size="sm",
+                                    ),
+                                    width=4,
+                                ),
+                                dbc.Col(
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.InputGroupText("A_lo"),
+                                            dbc.Input(
+                                                id="sfgui-a-lo",
+                                                type="number",
+                                                value=0.0,
+                                                step=0.1,
+                                                persistence=True,
+                                                persistence_type="session",
+                                            ),
+                                        ],
+                                        size="sm",
+                                    ),
+                                    width=4,
+                                ),
+                                dbc.Col(
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.InputGroupText("A_i"),
+                                            dbc.Input(
+                                                id="sfgui-a-int",
+                                                type="number",
+                                                value=0.1,
+                                                step=0.1,
+                                                min=0.0001,
+                                                persistence=True,
+                                                persistence_type="session",
+                                            ),
+                                        ],
+                                        size="sm",
+                                    ),
+                                    width=4,
+                                ),
+                            ]
                         ),
                     ]
                 ),
-                className="mt-2",
+                className="mt-3",
             ),
         ]
     ),
@@ -354,13 +406,24 @@ btn_generate = dbc.Button(
     className="me-2",
     disabled=True,
 )
-btn_run = dbc.Button("Run Fit", color="primary", id="sfgui-run", disabled=True)
-btn_run_loader = dcc.Loading(
-    id="sfgui-run-loader",
-    type="circle",
-    parent_style={"display": "inline-block", "marginRight": "0.5rem"},
-    children=btn_run,
+btn_run = dbc.Button("Run Fit", color="primary", id="sfgui-run", disabled=True, className="me-2")
+run_progress = dbc.Progress(
+    id="sfgui-progress",
+    value=0,
+    label="0%",
+    striped=True,
+    animated=False,
+    className="mt-2",
+    style={"height": "1.25rem"},
 )
+run_timer = dcc.Interval(
+    id="sfgui-run-timer",
+    interval=1000,
+    disabled=True,
+    n_intervals=0,
+)
+run_state = dcc.Store(id="sfgui-run-state", storage_type="session")
+redirect = dcc.Location(id="sfgui-redirect", refresh=True)
 btn_clear = dbc.Button("Clear", color="danger", id="sfgui-clear", className="mr-1")
 
 json_status = html.Div(id="sfgui-json-status", className="text-muted small mb-2")
@@ -381,6 +444,9 @@ layout = html.Div(
         store_filename,
         store_df,
         store_wave_bounds,
+        run_state,
+        run_timer,
+        redirect,
         dbc.Container(
             [
                 dbc.Row(
@@ -392,10 +458,11 @@ layout = html.Div(
                                 sn_checklist,
                                 html.Div(
                                     [
-                                        btn_run_loader,
+                                        btn_run,
                                         btn_generate,
                                         btn_clear,
                                         download_json,
+                                        run_progress,
                                     ],
                                     className="mt-2",
                                 ),
@@ -439,17 +506,28 @@ def _build_params(
     a_hi,
     a_lo,
     a_int,
+    wave_range=None,
+    progress_path=None,
 ):
+    if wave_range and len(wave_range) == 2:
+        lower_lam = float(wave_range[0])
+        upper_lam = float(wave_range[1])
+    else:
+        lower_lam = LOWER_LAM
+        upper_lam = UPPER_LAM
+
+    object_path = str(UPLOAD_DIR / filename) if filename else "spectrum.dat"
+
     return {
-        "object_to_fit": filename if filename else "spectrum.dat",
+        "object_to_fit": object_path,
         "use_exact_z": 1 if z_known is not None else 0,
         "z_exact": float(z_known) if z_known is not None else 0.05,
         "z_range_begin": float(z1) if z1 is not None else 0.0,
         "z_range_end": float(z2) if z2 is not None else 0.1,
         "z_int": float(dz) if dz is not None else 0.01,
         "resolution": 10,
-        "lower_lam": LOWER_LAM,
-        "upper_lam": UPPER_LAM,
+        "lower_lam": lower_lam,
+        "upper_lam": upper_lam,
         "saving_results_path": f"{RESULTS_DIR}{os.sep}",
         "pkg_dir": str(BASE_DIR),
         "temp_gal_tr": galaxies or ["E", "S0", "Sa", "Sb", "Sc"],
@@ -466,6 +544,7 @@ def _build_params(
         "show_plot": False,
         "show_plot_png": True,
         "how_many_plots": 5,
+        "progress_path": progress_path,
     }
 
 
@@ -473,27 +552,34 @@ def _parse_dat(contents, filename):
     _, content_string = contents.split(",", 1)
     data = base64.b64decode(content_string)
     text = data.decode("utf-8", errors="ignore")
-    buf = io.StringIO(text)
 
-    try:
-        df = pd.read_csv(buf, delim_whitespace=True, comment="#", header=None)
-    except Exception:
-        buf.seek(0)
-        df = pd.read_csv(buf, sep=",", comment="#", header=None)
+    rows = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s[0].isalpha() or s[0] in "#%@":
+            continue
 
-    if df.shape[1] < 2:
-        df = pd.DataFrame(columns=["wavelength", "flux"])
-    else:
-        df = df.iloc[:, :2]
-    df.columns = ["wavelength", "flux"]
+        parts = s.replace(",", " ").split()
+        if len(parts) < 2:
+            continue
 
-    df["wavelength"] = pd.to_numeric(df["wavelength"], errors="coerce")
-    df["flux"] = pd.to_numeric(df["flux"], errors="coerce")
-    df = df.dropna()
+        try:
+            wav = float(parts[0])
+            flux = float(parts[1])
+        except ValueError:
+            continue
+
+        rows.append((wav, flux))
+
+    df = pd.DataFrame(rows, columns=["wavelength", "flux"])
 
     if not df.empty:
         df = (
-            df.sort_values("wavelength")
+            df.replace([float("inf"), float("-inf")], pd.NA)
+            .dropna()
+            .sort_values("wavelength")
             .groupby("wavelength", as_index=False)["flux"]
             .mean()
             .reset_index(drop=True)
@@ -560,7 +646,6 @@ def upload_file(contents, filename):
     Output("sfgui-wave-range", "min"),
     Output("sfgui-wave-range", "max"),
     Output("sfgui-wave-range", "value"),
-    Output("sfgui-wave-label", "children"),
     Input("sfgui-store-wave", "data"),
     prevent_initial_call=True,
 )
@@ -575,7 +660,17 @@ def init_wave_slider(bounds):
     if mn >= mx:
         mn, mx = LOWER_LAM, UPPER_LAM
     val = [mn, mx]
-    return mn, mx, val, f"Wavelength range [{val[0]}, {val[1]}]"
+    return mn, mx, val
+
+
+@callback(
+    Output("sfgui-wave-label", "children"),
+    Input("sfgui-wave-range", "value"),
+)
+def wave_label(v):
+    if not v:
+        raise PreventUpdate
+    return f"Wavelength range [{v[0]}, {v[1]}]"
 
 
 @callback(
@@ -617,18 +712,27 @@ def update_graph(df_json, wave_range, filename):
 
     if not df_json:
         return fig
-    
+
     def smooth_flux(df, window=5):
         if df is None or df.empty:
             return df
         smoothed = df.copy()
-        smoothed["flux"] = smoothed["flux"].rolling(window, center=True, min_periods=1).mean()
+        smoothed["flux"] = smoothed["flux"].rolling(
+            window, center=True, min_periods=1
+        ).mean()
         return smoothed
 
     df = pd.read_json(df_json, orient="split")
-    df = smooth_flux(df, window=7)   
 
+    if wave_range and len(wave_range) == 2:
+        lo, hi = float(wave_range[0]), float(wave_range[1])
+        df = df[(df["wavelength"] >= lo) & (df["wavelength"] <= hi)]
+        fig.update_xaxes(range=[lo, hi])
 
+    if df.empty:
+        return fig
+
+    df = smooth_flux(df, window=7)
 
     fig.add_trace(
         go.Scatter(
@@ -658,6 +762,7 @@ def update_graph(df_json, wave_range, filename):
     State("sfgui-a-hi", "value"),
     State("sfgui-a-lo", "value"),
     State("sfgui-a-int", "value"),
+    State("sfgui-wave-range", "value"),
     State("sfgui-store-fn", "data"),
     prevent_initial_call=True,
 )
@@ -673,6 +778,7 @@ def generate_json(
     a_hi,
     a_lo,
     a_int,
+    wave_range,
     filename,
 ):
     if not n:
@@ -690,6 +796,7 @@ def generate_json(
         a_hi,
         a_lo,
         a_int,
+        wave_range=wave_range,
     )
     text = json.dumps(params, indent=4)
 
@@ -713,9 +820,12 @@ def generate_json(
 
 
 @callback(
+    Output("sfgui-run-state", "data"),
+    Output("sfgui-run-timer", "disabled"),
+    Output("sfgui-progress", "value"),
+    Output("sfgui-progress", "label"),
     Output("sfgui-run-status", "children"),
-    Output("run-flag", "data", allow_duplicate=True),
-    Output("sfgui-run-loader", "children", allow_duplicate=True),
+    Output("sfgui-run", "disabled", allow_duplicate=True),
     Input("sfgui-run", "n_clicks"),
     State("sfgui-z-known", "value"),
     State("sfgui-z1", "value"),
@@ -727,10 +837,11 @@ def generate_json(
     State("sfgui-a-hi", "value"),
     State("sfgui-a-lo", "value"),
     State("sfgui-a-int", "value"),
+    State("sfgui-wave-range", "value"),
     State("sfgui-store-fn", "data"),
     prevent_initial_call=True,
 )
-def run_fit(
+def start_fit(
     n,
     z_known,
     z1,
@@ -742,10 +853,18 @@ def run_fit(
     a_hi,
     a_lo,
     a_int,
+    wave_range,
     filename,
 ):
     if not n:
         raise PreventUpdate
+
+    run_id = str(uuid.uuid4())
+    progress_path = RESULTS_DIR / f"progress_{run_id}.json"
+    stdout_path = RESULTS_DIR / f"run_{run_id}.log"
+    stderr_path = RESULTS_DIR / f"run_{run_id}.err"
+
+    _write_progress(progress_path, 0, "Starting fit")
 
     params = _build_params(
         filename,
@@ -759,56 +878,138 @@ def run_fit(
         a_hi,
         a_lo,
         a_int,
+        wave_range=wave_range,
+        progress_path=str(progress_path),
     )
+
     json_string = json.dumps(params)
 
     try:
-        os.chdir(str(BASE_DIR))
-        result = subprocess.run(
+        stdout_f = open(stdout_path, "w")
+        stderr_f = open(stderr_path, "w")
+        proc = subprocess.Popen(
             [sys.executable, "run.py", json_string],
-            capture_output=True,
+            cwd=str(BASE_DIR),
+            stdout=stdout_f,
+            stderr=stderr_f,
             text=True,
-            timeout=600,
         )
-    except subprocess.TimeoutExpired:
-        alert = dbc.Alert(
-            "Fit timed out after 10 minutes. Try loosening parameters or running on a faster machine.",
-            color="warning",
-            className="mb-0",
-        )
-        return alert, None, dash.no_update
     except Exception as e:
-        alert = dbc.Alert(
-            f"Error while running fit: {e}", color="danger", className="mb-0"
+        return (
+            None,
+            True,
+            0,
+            "0%",
+            dbc.Alert(f"Error while starting fit: {e}", color="danger", className="mb-0"),
+            False,
         )
-        return alert, None, dash.no_update
 
-    if result.returncode == 0:
-        alert = dbc.Alert(
-            [
-                "Fit completed successfully.",
-                html.Br(),
-                dbc.Button(
-                    "See Results",
-                    href="/sggui",
-                    color="secondary",
-                    className="mt-2"
-                ),
-            ],
-            color="success",
-            className="mb-0",
-        )
-        return alert, {"action": "run", "ts": time.time()}, dash.no_update
+    RUNS[run_id] = {
+        "proc": proc,
+        "stdout": stdout_f,
+        "stderr": stderr_f,
+        "progress_path": str(progress_path),
+        "stderr_path": str(stderr_path),
+        "started": time.time(),
+    }
 
-    alert = dbc.Alert(
-        [
-            html.Strong("Fit failed."),
-            html.Pre(result.stderr or "", className="mb-0 mt-2 text-wrap"),
-        ],
-        color="danger",
-        className="mb-0",
+    return (
+        {
+            "run_id": run_id,
+            "progress_path": str(progress_path),
+            "stderr_path": str(stderr_path),
+        },
+        False,
+        0,
+        "0%",
+        dbc.Alert("Fit started.", color="info", className="mb-0"),
+        True,
     )
-    return alert, None, dash.no_update
+
+
+@callback(
+    Output("sfgui-progress", "value", allow_duplicate=True),
+    Output("sfgui-progress", "label", allow_duplicate=True),
+    Output("sfgui-run-status", "children", allow_duplicate=True),
+    Output("sfgui-run-timer", "disabled", allow_duplicate=True),
+    Output("sfgui-run", "disabled", allow_duplicate=True),
+    Output("run-flag", "data", allow_duplicate=True),
+    Output("sfgui-redirect", "pathname"),
+    Input("sfgui-run-timer", "n_intervals"),
+    State("sfgui-run-state", "data"),
+    prevent_initial_call=True,
+)
+def poll_fit(n_intervals, state):
+    if not state:
+        raise PreventUpdate
+
+    run_id = state.get("run_id")
+    run = RUNS.get(run_id)
+    percent, message = _read_progress(state.get("progress_path"))
+    label = f"{percent}%"
+
+    if not run:
+        return (
+            percent,
+            label,
+            dbc.Alert(message or "Fit status unavailable.", color="warning", className="mb-0"),
+            True,
+            False,
+            dash.no_update,
+            dash.no_update,
+        )
+
+    proc = run["proc"]
+
+    if proc.poll() is None:
+        return (
+            percent,
+            label,
+            dbc.Alert(message or "Fit running.", color="info", className="mb-0"),
+            False,
+            True,
+            dash.no_update,
+            dash.no_update,
+        )
+
+    for key in ("stdout", "stderr"):
+        try:
+            run[key].close()
+        except Exception:
+            pass
+
+    RUNS.pop(run_id, None)
+
+    if proc.returncode == 0:
+        _write_progress(state["progress_path"], 100, "Fit completed")
+        return (
+            100,
+            "100%",
+            dbc.Alert("Fit completed successfully. Redirecting to results.", color="success", className="mb-0"),
+            True,
+            False,
+            {"action": "run", "ts": time.time()},
+            "/sggui",
+        )
+
+    try:
+        err = Path(state.get("stderr_path", "")).read_text()
+    except Exception:
+        err = ""
+
+    return (
+        percent,
+        label,
+        dbc.Alert(
+            [html.Strong("Fit failed."), html.Pre(err, className="mb-0 mt-2 text-wrap")],
+            color="danger",
+            className="mb-0",
+        ),
+        True,
+        False,
+        None,
+        dash.no_update,
+    )
 
 
 @callback(
@@ -840,6 +1041,11 @@ def run_fit(
     Output("sfgui-run", "disabled", allow_duplicate=True),
     Output("sfgui-wave-range", "value", allow_duplicate=True),
     Output("run-flag", "data", allow_duplicate=True),
+    Output("sfgui-run-state", "data", allow_duplicate=True),
+    Output("sfgui-run-timer", "disabled", allow_duplicate=True),
+    Output("sfgui-progress", "value", allow_duplicate=True),
+    Output("sfgui-progress", "label", allow_duplicate=True),
+    Output("sfgui-redirect", "pathname", allow_duplicate=True),
     Input("sfgui-clear", "n_clicks"),
     prevent_initial_call=True,
 )
@@ -875,6 +1081,11 @@ def clear_all(n):
         True, 
         [LOWER_LAM, UPPER_LAM],  
         {"action": "clear", "ts": time.time()},
+        None,
+        True,
+        0,
+        "0%",
+        dash.no_update,
     )
 
 @callback(
