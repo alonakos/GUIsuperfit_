@@ -1,6 +1,10 @@
 # GUIsuperfit
 
 A two-page Dash interface for running and inspecting Superfit spectrum fitting results.
+<img width="1904" height="941" alt="Screenshot 2026-06-15 at 10 32 50 AM" src="https://github.com/user-attachments/assets/19ac4481-ff02-479a-8e2b-ffabf9f1a137" />
+<img width="1720" height="949" alt="Screenshot 2026-06-15 at 10 33 54 AM" src="https://github.com/user-attachments/assets/e4311825-b3d0-4065-928e-862630ef664a" />
+
+
 
 ## Overview
 
